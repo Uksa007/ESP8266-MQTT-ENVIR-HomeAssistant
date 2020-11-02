@@ -99,8 +99,18 @@ void send_to_xively()
   DEBUG_PRINTLN(fdata);
 }
 
+void fixDigits(String digits)
+{
+  // utility for fixing 2 digits adding leading 0
+  //if (digits.toInt() < 10)
+    digits= "0" + digits;
+    //Serial.print(digits);
+}
+
 void send_to_pvoutput()
 {
+  const char* host = "pvoutput.org";
+  const int httpsPort = 443;
   //https://www.pvoutput.org/help.html#api-addstatus
   //Parameter Field       Required  Format  Unit        Example   Since
   //d   Date                Yes   yyyymmdd  date        20100830  r1
@@ -114,21 +124,100 @@ void send_to_pvoutput()
   //c1  Cumulative Flag     No    number    -           1         r1
   //n   Net Flag            No    number    -           1         r2
 
-  snprintf(fdata, sizeof fdata, "d=%04d%02d%02d&t=%02d:%02d", year(),month(),day(),hour(),minute()); // Date and Time
-  int buflen = strlen(fdata);
-  if (valueCount[PVOUTPUT_SOLARCHANNEL] != 0) // Only send Generation if there is data!
-  {
-    snprintf(fdata + buflen, (sizeof fdata) - buflen, "&v2=%d", (int)(valueSum[PVOUTPUT_SOLARCHANNEL] / valueCount[PVOUTPUT_SOLARCHANNEL])); // Power Generation
-    buflen = strlen(fdata);
+
+  DEBUG_PRINTLN();
+  DEBUG_PRINTLN(F("[HTTP] GET GENERATION FROM PVOUTPUT "));
+  //fixDigits("1");
+  secureclient.setTrustAnchors(&cert);
+    if (!secureclient.connect(host, httpsPort)) {
+    DEBUG_PRINTLN(F("Connection failed"));
+    return;
   }
-  snprintf(fdata + buflen, (sizeof fdata) - buflen, "&v4=%d", (int)(valueSum[0] / valueCount[0])); // Power Consumption
-  buflen = strlen(fdata);
-  snprintf(fdata + buflen, (sizeof fdata) - buflen, "&v5=%d.%02d", (int)temp, (int)(temp * 100) % 100); // Temperature
+    //String url = "/service/r2/getoutput.jsp?key=5a059bd11ff6d7dbc57c91dcac6d0e5d0f6e677f&sid=79587&limit=1";
+    String url = "/service/r2/getstatus.jsp?key="+String(PVOUTPUT_KEY)+"&sid="+PVOUTPUT_SYSTEMID+"&h=1&limit=1";
+  //Serial.print("Requesting URL: ");
+  //Serial.println(url);
+  
+    secureclient.print(String("GET ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "User-Agent: ESP8266\r\n" +
+               "Connection: close\r\n\r\n");
+
+  DEBUG_PRINTLN(F("Request sent"));
+  while (secureclient.connected()) {
+    String line = secureclient.readStringUntil('\n');
+    if (line == "\r") {
+      DEBUG_PRINTLN(F("Headers received"));
+      break;
+    }
+  }
+  String solarPower;
+  String generation;
+  String reply = secureclient.readStringUntil('\n');
+  //if (reply.startsWith(String (year())+month()+fixDigits(day()))) { //Find the Generation in the String
+    if (reply.startsWith(String (year()))) {
+    //Serial.println("Get Generation from Pvoutput successfull!");
+    int startindex = reply.indexOf(',');
+    startindex = reply.indexOf(',', startindex + 1);
+    startindex = reply.indexOf(',', startindex + 1);
+    startindex = reply.indexOf(',', startindex + 1);
+    int endindex = reply.indexOf(',', startindex + 1);
+    solarPower = reply.substring(startindex+1, endindex);
+    startindex = reply.indexOf(',', startindex + 1);
+    endindex = reply.indexOf(',', startindex + 1);
+    generation = reply.substring(startindex+1, endindex);
+    
+    DEBUG_PRINT(F("ENViR: "));
+    DEBUG_PRINTLN(valueSum[0] / valueCount[0]);
+    DEBUG_PRINT(F("Solar Power: "));
+    DEBUG_PRINTLN(solarPower);
+    DEBUG_PRINT(F("Solar Average: "));
+    DEBUG_PRINTLN(generation);  
+    valueSum[0] = (valueSum[0] - (725 * valueCount[0])); // Calibrate current cost for small loads
+    generation = solarPower; //Use solar Power not Average
+    
+    if (generation == "NaN" || generation.toInt() == 0) {
+      //No Solar Generaton, Importing
+      DEBUG_PRINT(F("Importing "));
+      //valueSum[0] = (valueSum[0] - (727 * valueCount[0])); // Calibrate current cost for small loads
+    } else if (generation.toInt() <= (valueSum[0] / valueCount[0])) {   
+        // Solar Generation, Exporting Normally
+        DEBUG_PRINT(F("Solar,Exporting "));
+        valueSum[0] = ((valueSum[0] / valueCount[0]) - generation.toInt()) * valueCount[0];
+      } else {
+      // Solar Generation, solar larger than envir, due to self consumption?
+        DEBUG_PRINT(F("Solar,Consumtion "));
+        valueSum[0] = (generation.toInt() - (valueSum[0] / valueCount[0])) * valueCount[0];
+      }
+    
+        DEBUG_PRINT(F("Diff: "));
+        DEBUG_PRINTLN(valueSum[0] / valueCount[0]);
+
+  } else {
+    DEBUG_PRINTLN(F("Unable to get Generation"));
+  }
+  DEBUG_PRINTLN(F("Reply was:"));
+  DEBUG_PRINTLN(reply);
+
+  DEBUG_PRINTLN(F("=========="));
+  DEBUG_PRINTLN(F("Closing connection"));
+
+    snprintf(fdata, sizeof fdata, "d=%04d%02d%02d&t=%02d:%02d", year(),month(),day(),hour(),minute()); // Date and Time
+    int buflen = strlen(fdata); 
+    if (valueCount[PVOUTPUT_SOLARCHANNEL] != 0) // Only send Generation if there is data!
+    { 
+      snprintf(fdata + buflen, (sizeof fdata) - buflen, "&v2=%d", (int)(valueSum[PVOUTPUT_SOLARCHANNEL] / valueCount[PVOUTPUT_SOLARCHANNEL])); // Power Generation
+      buflen = strlen(fdata);
+    }
+    snprintf(fdata + buflen, (sizeof fdata) - buflen, "&v4=%d", (int)(valueSum[0] / valueCount[0])); // Power Consumption
+    buflen = strlen(fdata);
+    snprintf(fdata + buflen, (sizeof fdata) - buflen, "&v5=%d.%02d", (int)temp, (int)(temp * 100) % 100); // Temperature
+
 
   DEBUG_PRINTLN();
   DEBUG_PRINT(F("[HTTP] PUSH TO PVOUTPUT "));
   
-  http.begin("http://pvoutput.org/service/r2/addstatus.jsp?"+String(fdata)+"&key="+PVOUTPUT_KEY+"&sid="+PVOUTPUT_SYSTEMID); 
+  http.begin("http://pvoutput.org/service/r2/addstatus.jsp?"+String(fdata)+"&key="+PVOUTPUT_KEY+"&sid="+PVOUTPUT_SYSTEMID+"&n=0"); //added +"&n=0" to send NET consumption
   int resultCode = http.GET();
   if(resultCode == HTTP_CODE_OK) {
     DEBUG_PRINTLN(F("OK"));
@@ -142,6 +231,7 @@ void send_to_pvoutput()
 
   DEBUG_PRINTLN(F("Data:"));
   DEBUG_PRINTLN(fdata);
+
 }
 
 void send_to_thingspeak()
@@ -177,7 +267,6 @@ void send_to_thingspeak()
   DEBUG_PRINT(F("Data:"));
   DEBUG_PRINTLN(fdata);
 }
-
 
 void process_result()
 {
