@@ -1,6 +1,12 @@
-# ESP MQTT EnviR PowerMonitor
+# ESP MQTT EnviR PowerMonitor modified to subtract solar generation from EnviR data where it captures both
 =====================
 
+## Modifications: 
+Sometimes it's not possible for EnviR to be connected where it only sees consumption data, it also sees the Solar Generation from the inverter.
+This modifited version fixes the problem by subtracting the Solar generation from the EnviR consumption and uploades the fixed consumption data to Pvoutput.
+Uses Pvoutput API to get Solar Generation data.
+
+## Original instructions
 This project consists of firmware to ease the monitoring of household electricity usage.
 
 A simple C program for Arduino, which parses XML data from a Current Cost power meter & uploads to MQTT, PVOutput, Xively and Thingspeak.
